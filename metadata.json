@@ -1,0 +1,8 @@
+{
+  "name": "AetherDrop - Encrypted P2P File Transfer",
+  "description": "Secure, direct peer-to-peer file transfer between phones and PCs with end-to-end AES-256-GCM encryption, drag-and-drop interface, real-time progress, and transfers up to 500MB without cloud storage.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
