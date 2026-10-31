@@ -1,4 +1,3 @@
-import React from 'react';
 import { QrCode, ShieldCheck, LogOut, PlusCircle } from 'lucide-react';
 
 interface HeaderProps {
@@ -6,10 +5,12 @@ interface HeaderProps {
   setActiveTab: (tab: 'transfer' | 'devices' | 'history' | 'security') => void;
   onOpenQR: () => void;
   onOpenRoomModal: () => void;
+  onOpenSignalingModal?: () => void;
   onLeaveRoom: () => void;
   peerCount: number;
   roomId: string;
   inRoom: boolean;
+  signalingStatus?: unknown;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -81,7 +82,7 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         </nav>
 
-        {/* Zone 3: 1 Primary Action */}
+        {/* Zone 3: Primary Action & Controls */}
         <div className="flex items-center gap-2.5 shrink-0">
           {inRoom ? (
             <>

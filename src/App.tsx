@@ -22,18 +22,22 @@ import { QRCodeModal } from './components/QRCodeModal';
 import { RoomModal } from './components/RoomModal';
 import { QuickTextFeed } from './components/QuickTextFeed';
 import { IncomingTransferModal } from './components/IncomingTransferModal';
+import { SignalingModal } from './components/SignalingModal';
+import { signalingService } from './services/signalingService';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transfer' | 'devices' | 'history' | 'security'>('transfer');
   const [isQrOpen, setIsQrOpen] = useState(false);
   const [isRoomModalOpen, setIsRoomModalOpen] = useState(false);
+  const [isSignalingModalOpen, setIsSignalingModalOpen] = useState(false);
+  const [showOfflineNotice, setShowOfflineNotice] = useState(false);
   const dropZoneRef = useRef<DropZoneHandle>(null);
 
   // Sync state with connection manager
   const [, setTick] = useState(0);
 
   useEffect(() => {
-    // Initialize WebSocket connection
+    // Initialize connection
     connectionManager.connectWebSocket();
 
     const unsubscribe = connectionManager.subscribe(() => {
@@ -44,6 +48,22 @@ export default function App() {
       unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (connectionManager.isConnected) {
+      setShowOfflineNotice(false);
+      return;
+    }
+
+    // Grace period for normal fast connection handshake (~3.5 seconds)
+    const timer = setTimeout(() => {
+      if (!connectionManager.isConnected) {
+        setShowOfflineNotice(true);
+      }
+    }, 3500);
+
+    return () => clearTimeout(timer);
+  }, [connectionManager.isConnected]);
 
   const peers = Array.from(connectionManager.peers.values());
   const activeTransfersList = Array.from(connectionManager.activeTransfers.values());
@@ -83,6 +103,8 @@ export default function App() {
     dropZoneRef.current?.openFilePicker();
   };
 
+  const signalingStatus = signalingService.getStatus();
+
   return (
     <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100 pb-20 md:pb-8 selection:bg-cyan-500/30 selection:text-cyan-200">
       {/* Top Header */}
@@ -91,27 +113,39 @@ export default function App() {
         setActiveTab={setActiveTab}
         onOpenQR={() => setIsQrOpen(true)}
         onOpenRoomModal={() => setIsRoomModalOpen(true)}
+        onOpenSignalingModal={() => setIsSignalingModalOpen(true)}
         onLeaveRoom={handleLeaveRoom}
         peerCount={peers.length}
         roomId={connectionManager.roomId}
         inRoom={connectionManager.inRoom}
+        signalingStatus={signalingStatus}
       />
 
       {/* Main Container */}
       <main className="flex-1 max-w-5xl w-full mx-auto px-4 sm:px-6 py-6 md:py-8 space-y-6">
-        {/* Offline / Connecting Warning Banner if WS drops */}
-        {!connectionManager.isConnected && (
-          <div className="p-3 bg-amber-950/60 border border-amber-800/80 rounded-xl flex items-center justify-between text-xs text-amber-200">
-            <div className="flex items-center gap-2">
-              <WifiOff className="w-4 h-4 text-amber-400 shrink-0" />
-              <span>Connecting to signaling network... (retrying automatically)</span>
+        {/* Offline Notice if connection is dropped */}
+        {showOfflineNotice && !connectionManager.isConnected && (
+          <div className="p-3.5 bg-amber-950/70 border border-amber-800/90 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-200 shadow-lg shadow-black/20 animate-in fade-in">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-amber-900/60 border border-amber-700/80 flex items-center justify-center shrink-0">
+                <WifiOff className="w-4 h-4 text-amber-400" />
+              </div>
+              <div>
+                <p className="font-semibold text-amber-100">Connecting to Global P2P Network...</p>
+                <p className="text-[11px] text-amber-300/80">
+                  {signalingStatus.lastError || 'Connecting via serverless cloud broker for zero-setup peer transfers.'}
+                </p>
+              </div>
             </div>
-            <button
-              onClick={() => connectionManager.connectWebSocket()}
-              className="text-amber-300 underline hover:text-amber-100"
-            >
-              Reconnect Now
-            </button>
+
+            <div className="flex items-center gap-2 pl-9 sm:pl-0 shrink-0">
+              <button
+                onClick={() => connectionManager.connectWebSocket()}
+                className="px-3 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 font-semibold text-xs transition-colors"
+              >
+                Retry
+              </button>
+            </div>
           </div>
         )}
 
@@ -237,6 +271,11 @@ export default function App() {
         currentRoomId={connectionManager.roomId}
         onCreateRoom={handleCreateRoom}
         onJoinRoom={handleJoinRoom}
+      />
+
+      <SignalingModal
+        isOpen={isSignalingModalOpen}
+        onClose={() => setIsSignalingModalOpen(false)}
       />
 
       {/* Incoming File Transfer Approval Prompt */}

@@ -24,6 +24,7 @@ import {
   hexToBuf,
 } from '../utils/crypto';
 import { getDeviceInfo } from '../utils/device';
+import { signalingService } from './signalingService';
 
 export const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
 const CHUNK_SIZE = 64 * 1024; // 64 KB
@@ -43,7 +44,6 @@ interface ActiveReceivingFile {
 }
 
 export class ConnectionManager {
-  private ws: WebSocket | null = null;
   public localPeer: PeerInfo;
   public roomId: string = '';
   public roomSecret: string = '';
@@ -80,6 +80,19 @@ export class ConnectionManager {
     this.localPeer = getDeviceInfo();
     this.loadHistory();
     this.initRoomParams();
+
+    // Attach signaling service listeners
+    signalingService.setMessageHandler((msg) => {
+      this.handleServerMessage(msg);
+    });
+
+    signalingService.subscribeStatus((status) => {
+      this.isConnected = status.isConnected;
+      this.reconnectAttempts = status.reconnectAttempts;
+      this.notify();
+    });
+
+    signalingService.updateContext(this.localPeer, this.roomId);
   }
 
   public subscribe(listener: ConnectionListener): () => void {
@@ -169,6 +182,8 @@ export class ConnectionManager {
     url.searchParams.delete('room');
     url.hash = '';
     window.history.replaceState(null, '', url.toString());
+
+    signalingService.updateContext(this.localPeer, '');
     this.notify();
   }
 
@@ -197,15 +212,12 @@ export class ConnectionManager {
 
     // Reset connections and reconnect to new room
     this.disconnectAllPeers();
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.sendWs({
-        type: 'join-room',
-        roomId: this.roomId,
-        peerInfo: this.localPeer,
-      });
-    } else {
-      this.connectWebSocket();
-    }
+    signalingService.updateContext(this.localPeer, this.roomId);
+    this.sendWs({
+      type: 'join-room',
+      roomId: this.roomId,
+      peerInfo: this.localPeer,
+    });
     this.notify();
   }
 
@@ -213,8 +225,10 @@ export class ConnectionManager {
     if (!newName.trim()) return;
     this.localPeer.name = newName.trim();
     localStorage.setItem('aetherdrop_device_name', this.localPeer.name);
+    signalingService.updateContext(this.localPeer, this.roomId);
+
     // Notify room of updated name
-    if (this.ws && this.ws.readyState === WebSocket.OPEN && this.inRoom && this.roomId) {
+    if (this.inRoom && this.roomId) {
       this.sendWs({
         type: 'join-room',
         roomId: this.roomId,
@@ -225,61 +239,12 @@ export class ConnectionManager {
   }
 
   public connectWebSocket() {
-    if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) {
-      return;
-    }
-
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws`;
-
-    try {
-      this.ws = new WebSocket(wsUrl);
-
-      this.ws.onopen = () => {
-        this.isConnected = true;
-        this.reconnectAttempts = 0;
-        if (this.inRoom && this.roomId) {
-          this.sendWs({
-            type: 'join-room',
-            roomId: this.roomId,
-            peerInfo: this.localPeer,
-          });
-        }
-        this.notify();
-      };
-
-      this.ws.onmessage = (event) => {
-        try {
-          const msg = JSON.parse(event.data);
-          this.handleServerMessage(msg);
-        } catch (e) {
-          console.error('Failed to parse WS message', e);
-        }
-      };
-
-      this.ws.onclose = () => {
-        this.isConnected = false;
-        this.notify();
-        // Auto-reconnect with exponential backoff
-        const delay = Math.min(1000 * Math.pow(1.5, this.reconnectAttempts), 10000);
-        this.reconnectAttempts++;
-        setTimeout(() => {
-          this.connectWebSocket();
-        }, delay);
-      };
-
-      this.ws.onerror = (err) => {
-        console.warn('WebSocket signaling error', err);
-      };
-    } catch (e) {
-      console.error('Failed to initialize WebSocket', e);
-    }
+    signalingService.updateContext(this.localPeer, this.roomId);
+    signalingService.connect();
   }
 
   private sendWs(msg: Record<string, any>) {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      this.ws.send(JSON.stringify(msg));
-    }
+    signalingService.sendMessage(msg);
   }
 
   private handleServerMessage(msg: any) {
@@ -361,6 +326,7 @@ export class ConnectionManager {
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun.cloudflare.com:3478' },
       ],
     });
 
