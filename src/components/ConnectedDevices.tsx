@@ -172,8 +172,6 @@ export const ConnectedDevices: React.FC<ConnectedDevicesProps> = ({
 
               <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
                 <span>{localPeer.os}</span>
-                <span aria-hidden="true">·</span>
-                <span>{localPeer.browser}</span>
               </div>
             </div>
           </div>
