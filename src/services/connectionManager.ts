@@ -16,6 +16,8 @@ import {
   deriveSecretFromRoomCodeSync,
   decryptChunk,
   encryptChunk,
+  encryptRawChunk,
+  decryptRawChunk,
   encryptText,
   decryptText,
   generateRoomCode,
@@ -23,11 +25,88 @@ import {
   bufToHex,
   hexToBuf,
 } from '../utils/crypto';
-import { getDeviceInfo } from '../utils/device';
+import { getDeviceInfo, enhanceDeviceInfoAsync } from '../utils/device';
 import { signalingService } from './signalingService';
 
 export const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
-const CHUNK_SIZE = 64 * 1024; // 64 KB
+const CHUNK_SIZE = 128 * 1024; // 128 KB for high-throughput WebRTC SCTP streaming
+
+/**
+ * Fast binary framing for WebRTC DataChannel (zero Base64 / string overhead).
+ * Header layout:
+ * - 0xAA (1 byte magic)
+ * - idLen (1 byte)
+ * - transferId ASCII bytes (idLen bytes)
+ * - chunkIndex (4 bytes, uint32 BE)
+ * - totalChunks (4 bytes, uint32 BE)
+ * - iv (12 bytes AES-GCM IV)
+ * - ciphertext bytes (remaining)
+ */
+function packBinaryChunk(
+  transferId: string,
+  chunkIndex: number,
+  totalChunks: number,
+  iv: Uint8Array,
+  cipherBuffer: ArrayBuffer
+): ArrayBuffer {
+  const enc = new TextEncoder();
+  const idBytes = enc.encode(transferId);
+  const headerLen = 1 + 1 + idBytes.length + 4 + 4 + 12;
+  const packet = new Uint8Array(headerLen + cipherBuffer.byteLength);
+
+  packet[0] = 0xaa;
+  packet[1] = idBytes.length;
+  packet.set(idBytes, 2);
+
+  let offset = 2 + idBytes.length;
+  const view = new DataView(packet.buffer, packet.byteOffset, packet.byteLength);
+  view.setUint32(offset, chunkIndex, false);
+  offset += 4;
+  view.setUint32(offset, totalChunks, false);
+  offset += 4;
+  packet.set(iv, offset);
+  offset += 12;
+
+  packet.set(new Uint8Array(cipherBuffer), offset);
+  return packet.buffer;
+}
+
+function unpackBinaryChunk(buffer: ArrayBuffer): {
+  transferId: string;
+  chunkIndex: number;
+  totalChunks: number;
+  iv: Uint8Array;
+  cipherBuffer: ArrayBuffer;
+} | null {
+  if (buffer.byteLength < 22) return null;
+  const u8 = new Uint8Array(buffer);
+  if (u8[0] !== 0xaa) return null;
+
+  const idLen = u8[1];
+  if (buffer.byteLength < 1 + 1 + idLen + 4 + 4 + 12) return null;
+
+  const dec = new TextDecoder();
+  const transferId = dec.decode(u8.subarray(2, 2 + idLen));
+
+  let offset = 2 + idLen;
+  const view = new DataView(buffer);
+  const chunkIndex = view.getUint32(offset, false);
+  offset += 4;
+  const totalChunks = view.getUint32(offset, false);
+  offset += 4;
+  const iv = u8.slice(offset, offset + 12);
+  offset += 12;
+
+  const cipherBuffer = buffer.slice(offset);
+
+  return {
+    transferId,
+    chunkIndex,
+    totalChunks,
+    iv,
+    cipherBuffer,
+  };
+}
 
 export type ConnectionListener = () => void;
 
@@ -93,6 +172,20 @@ export class ConnectionManager {
     });
 
     signalingService.updateContext(this.localPeer, this.roomId);
+
+    // Asynchronously enhance device model (Client Hints & Battery)
+    enhanceDeviceInfoAsync((updatedPeer) => {
+      this.localPeer = updatedPeer;
+      signalingService.updateContext(this.localPeer, this.roomId);
+      if (this.inRoom && this.roomId) {
+        this.sendWs({
+          type: 'join-room',
+          roomId: this.roomId,
+          peerInfo: this.localPeer,
+        });
+      }
+      this.notify();
+    });
   }
 
   public subscribe(listener: ConnectionListener): () => void {
@@ -221,10 +314,13 @@ export class ConnectionManager {
     this.notify();
   }
 
-  public setDeviceName(newName: string) {
+  public setDeviceName(newName: string, isCustom: boolean = true) {
     if (!newName.trim()) return;
     this.localPeer.name = newName.trim();
     localStorage.setItem('aetherdrop_device_name', this.localPeer.name);
+    if (isCustom) {
+      localStorage.setItem('aetherdrop_device_name_is_custom', 'true');
+    }
     signalingService.updateContext(this.localPeer, this.roomId);
 
     // Notify room of updated name
@@ -390,7 +486,7 @@ export class ConnectionManager {
 
   private setupDataChannel(peerId: string, dc: RTCDataChannel) {
     dc.binaryType = 'arraybuffer';
-    dc.bufferedAmountLowThreshold = 128 * 1024; // 128KB threshold for backpressure
+    dc.bufferedAmountLowThreshold = 256 * 1024; // 256KB threshold for continuous pipelining
 
     dc.onopen = () => {
       this.dataChannels.set(peerId, dc);
@@ -412,6 +508,10 @@ export class ConnectionManager {
 
     dc.onmessage = (event) => {
       try {
+        if (event.data instanceof ArrayBuffer) {
+          this.handleBinaryChunkMessage(event.data);
+          return;
+        }
         if (typeof event.data === 'string') {
           const msg = JSON.parse(event.data);
           if (msg.type === 'file-request') {
@@ -648,8 +748,8 @@ export class ConnectionManager {
         }
         item.status = 'transferring';
 
-        // Check WebRTC DataChannel backpressure
-        if (useWebRtc && dc.bufferedAmount > 512 * 1024) {
+        // Check WebRTC DataChannel backpressure (1MB threshold ensures continuous pipeline saturation)
+        if (useWebRtc && dc.bufferedAmount > 1024 * 1024) {
           await new Promise<void>((resolve) => {
             const onLow = () => {
               dc.removeEventListener('bufferedamountlow', onLow);
@@ -662,23 +762,23 @@ export class ConnectionManager {
         const slice = file.slice(offset, offset + CHUNK_SIZE);
         const arrayBuffer = await slice.arrayBuffer();
 
-        // Encrypt chunk using AES-256-GCM
-        const encrypted = await encryptChunk(cryptoKey, arrayBuffer);
-
-        const chunkMsg: FileChunkMessage = {
-          type: 'file-chunk',
-          transferId,
-          chunkIndex,
-          totalChunks,
-          ivHex: encrypted.ivHex,
-          encryptedBase64: encrypted.encryptedBase64,
-        };
-
-        const serialized = JSON.stringify(chunkMsg);
-
         if (useWebRtc) {
-          dc.send(serialized);
+          // Zero-copy binary stream: encrypt directly to raw ArrayBuffer and send over SCTP
+          const { iv, cipherBuffer } = await encryptRawChunk(cryptoKey, arrayBuffer);
+          const binaryPacket = packBinaryChunk(transferId, chunkIndex, totalChunks, iv, cipherBuffer);
+          dc.send(binaryPacket);
         } else {
+          // Relay fallback mode (Base64 JSON over WebSocket)
+          const encrypted = await encryptChunk(cryptoKey, arrayBuffer);
+          const chunkMsg: FileChunkMessage = {
+            type: 'file-chunk',
+            transferId,
+            chunkIndex,
+            totalChunks,
+            ivHex: encrypted.ivHex,
+            encryptedBase64: encrypted.encryptedBase64,
+          };
+
           this.sendWs({
             type: 'relay-chunk',
             targetPeerId: peerId,
@@ -953,6 +1053,74 @@ export class ConnectionManager {
       this.notify();
     } catch (err) {
       console.error('Failed to initialize incoming encrypted file transfer', err);
+    }
+  }
+
+  private async handleBinaryChunkMessage(buffer: ArrayBuffer) {
+    const unpacked = unpackBinaryChunk(buffer);
+    if (!unpacked) return;
+
+    const { transferId, chunkIndex, totalChunks, iv, cipherBuffer } = unpacked;
+    const receiving = this.receivingFiles.get(transferId);
+    if (!receiving) return;
+
+    let decryptedBuf: ArrayBuffer | null = null;
+    try {
+      decryptedBuf = await decryptRawChunk(receiving.key, cipherBuffer, iv);
+    } catch (err: any) {
+      // Self-healing: if the sender used the standard room-derived key (e.g. joined by room code),
+      // attempt recovery with the deterministic room secret.
+      try {
+        const roomDerivedSecret = deriveSecretFromRoomCodeSync(this.roomId);
+        const salt = hexToBuf(receiving.metadata.saltHex);
+        const fallbackKey = await deriveEncryptionKey(roomDerivedSecret, salt);
+        decryptedBuf = await decryptRawChunk(fallbackKey, cipherBuffer, iv);
+        // Fallback succeeded! Adopt this key for all subsequent chunks
+        receiving.key = fallbackKey;
+        this.roomSecret = roomDerivedSecret;
+        this.securityFingerprint = computeSecurityFingerprint(this.roomSecret);
+        this.notify();
+      } catch (fallbackErr) {
+        console.error('Failed to decrypt received binary chunk:', err);
+        receiving.transferItem.status = 'error';
+        receiving.transferItem.error = 'Encryption key mismatch. Ensure both devices are in room ' + this.roomId;
+        this.notify();
+        return;
+      }
+    }
+
+    if (!decryptedBuf) return;
+
+    receiving.chunks[chunkIndex] = decryptedBuf;
+    receiving.receivedCount++;
+
+    const item = receiving.transferItem;
+    item.chunksCompleted = receiving.receivedCount;
+    item.transferredBytes = Math.min(
+      receiving.metadata.size,
+      item.transferredBytes + decryptedBuf.byteLength
+    );
+    item.progress =
+      receiving.metadata.size === 0
+        ? 100
+        : Math.min(100, (item.transferredBytes / receiving.metadata.size) * 100);
+
+    // Speed & ETA
+    const now = Date.now();
+    const deltaSec = (now - receiving.lastUpdate) / 1000;
+    if (deltaSec >= 0.5 || receiving.receivedCount === receiving.metadata.totalChunks) {
+      const deltaBytes = item.transferredBytes - receiving.lastBytes;
+      item.speedBps = deltaSec > 0 ? deltaBytes / deltaSec : 0;
+      const remainingBytes = receiving.metadata.size - item.transferredBytes;
+      item.etaSeconds = item.speedBps > 0 ? remainingBytes / item.speedBps : 0;
+      receiving.lastUpdate = now;
+      receiving.lastBytes = item.transferredBytes;
+      this.notify();
+    }
+
+    // Check if all chunks received
+    if (receiving.receivedCount === receiving.metadata.totalChunks) {
+      this.finalizeReceivedFile(receiving);
     }
   }
 

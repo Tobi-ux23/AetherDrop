@@ -6,6 +6,7 @@ export interface PeerInfo {
   deviceType: DeviceType;
   os: string;
   browser: string;
+  model?: string;
 }
 
 export type TransferStatus =

@@ -12,6 +12,7 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { PeerInfo } from '../types';
+import { DeviceModelModal } from './DeviceModelModal';
 
 interface ConnectedDevicesProps {
   localPeer: PeerInfo;
@@ -19,7 +20,7 @@ interface ConnectedDevicesProps {
   peerTransports: Map<string, 'webrtc' | 'relay'>;
   roomId: string;
   fingerprint?: { emojis: string; hex: string };
-  onUpdateDeviceName: (name: string) => void;
+  onUpdateDeviceName: (name: string, isCustom?: boolean) => void;
   onOpenQR: () => void;
   onOpenRoomModal: () => void;
   onLeaveRoom: () => void;
@@ -39,6 +40,7 @@ export const ConnectedDevices: React.FC<ConnectedDevicesProps> = ({
   onSelectPeerForSend,
 }) => {
   const [isEditingName, setIsEditingName] = useState(false);
+  const [isModelModalOpen, setIsModelModalOpen] = useState(false);
   const [nameInput, setNameInput] = useState(localPeer.name);
   const [copiedLink, setCopiedLink] = useState(false);
 
@@ -159,12 +161,9 @@ export const ConnectedDevices: React.FC<ConnectedDevicesProps> = ({
                     {localPeer.name}
                   </h4>
                   <button
-                    onClick={() => {
-                      setNameInput(localPeer.name);
-                      setIsEditingName(true);
-                    }}
-                    className="text-slate-500 hover:text-slate-300 p-1"
-                    title="Edit device name"
+                    onClick={() => setIsModelModalOpen(true)}
+                    className="text-slate-400 hover:text-cyan-300 p-1 rounded hover:bg-slate-800 transition-colors"
+                    title="Change device model name"
                   >
                     <Edit2 className="w-3.5 h-3.5" />
                   </button>
@@ -175,8 +174,6 @@ export const ConnectedDevices: React.FC<ConnectedDevicesProps> = ({
                 <span>{localPeer.os}</span>
                 <span aria-hidden="true">·</span>
                 <span>{localPeer.browser}</span>
-                <span aria-hidden="true">·</span>
-                <span className="font-mono text-[11px] text-slate-500">{localPeer.id}</span>
               </div>
             </div>
           </div>
@@ -258,6 +255,14 @@ export const ConnectedDevices: React.FC<ConnectedDevicesProps> = ({
           </div>
         )}
       </div>
+
+      {/* Device Model Modal */}
+      <DeviceModelModal
+        isOpen={isModelModalOpen}
+        onClose={() => setIsModelModalOpen(false)}
+        localPeer={localPeer}
+        onUpdateDeviceName={onUpdateDeviceName}
+      />
     </div>
   );
 };

@@ -188,7 +188,7 @@ export default function App() {
                   peerTransports={connectionManager.peerTransports}
                   roomId={connectionManager.roomId}
                   fingerprint={connectionManager.securityFingerprint}
-                  onUpdateDeviceName={(name) => connectionManager.setDeviceName(name)}
+                  onUpdateDeviceName={(name, isCustom) => connectionManager.setDeviceName(name, isCustom)}
                   onOpenQR={() => setIsQrOpen(true)}
                   onOpenRoomModal={() => setIsRoomModalOpen(true)}
                   onLeaveRoom={handleLeaveRoom}

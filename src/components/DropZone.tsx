@@ -254,8 +254,6 @@ export const DropZone = React.forwardRef<DropZoneHandle, DropZoneProps>(({
             <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-xs text-slate-400">
               <span>Supports files up to 500 MB</span>
               <span aria-hidden="true">·</span>
-              <span>AES-256-GCM Encrypted</span>
-              <span aria-hidden="true">·</span>
               <span>Direct P2P</span>
             </div>
           </div>
@@ -364,20 +362,6 @@ export const DropZone = React.forwardRef<DropZoneHandle, DropZoneProps>(({
         </div>
       )}
 
-      {/* Helper when no peers are connected */}
-      {peers.length === 0 && (
-        <div className="mt-5 p-3.5 bg-slate-950/60 border border-dashed border-slate-800 rounded-xl flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-400">
-          <div>
-            <span className="font-medium text-slate-300">Ready to transfer?</span> Open this page on your phone or PC to pair them.
-          </div>
-          <button
-            onClick={onOpenQR}
-            className="px-3 py-1.5 text-xs font-medium text-cyan-300 bg-cyan-950/60 hover:bg-cyan-950 border border-cyan-800/80 rounded-lg whitespace-nowrap transition-colors"
-          >
-            Show QR Code / Room Link
-          </button>
-        </div>
-      )}
     </div>
   );
 });

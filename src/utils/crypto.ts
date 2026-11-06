@@ -184,7 +184,47 @@ export async function deriveEncryptionKey(passphrase: string, salt: Uint8Array):
 }
 
 /**
- * Encrypt a chunk using AES-256-GCM with a unique 12-byte initialization vector
+ * High-speed raw binary encryption for WebRTC DataChannels (zero Base64 / string overhead)
+ */
+export async function encryptRawChunk(
+  key: CryptoKey,
+  rawBuffer: ArrayBuffer
+): Promise<{ iv: Uint8Array; cipherBuffer: ArrayBuffer }> {
+  const iv = new Uint8Array(12);
+  crypto.getRandomValues(iv);
+
+  const cipherBuffer = await crypto.subtle.encrypt(
+    {
+      name: 'AES-GCM',
+      iv,
+    },
+    key,
+    rawBuffer
+  );
+
+  return { iv, cipherBuffer };
+}
+
+/**
+ * High-speed raw binary decryption for WebRTC DataChannels (zero Base64 / string overhead)
+ */
+export async function decryptRawChunk(
+  key: CryptoKey,
+  cipherBuffer: ArrayBuffer,
+  iv: Uint8Array
+): Promise<ArrayBuffer> {
+  return await crypto.subtle.decrypt(
+    {
+      name: 'AES-GCM',
+      iv: iv as any,
+    },
+    key,
+    cipherBuffer
+  );
+}
+
+/**
+ * Encrypt a chunk using AES-256-GCM with a unique 12-byte initialization vector (Legacy / Relay mode)
  */
 export async function encryptChunk(
   key: CryptoKey,
