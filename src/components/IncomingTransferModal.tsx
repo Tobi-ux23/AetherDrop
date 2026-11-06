@@ -8,9 +8,6 @@ import {
   File as FileIcon,
   Check,
   X,
-  ShieldCheck,
-  Download,
-  AlertCircle,
 } from 'lucide-react';
 import { IncomingTransferRequest } from '../types';
 import { formatBytes } from '../utils/device';
@@ -84,11 +81,6 @@ export const IncomingTransferModal: React.FC<IncomingTransferModalProps> = ({
                 </div>
               </div>
 
-              {/* Security info */}
-              <div className="flex items-center gap-1.5 text-[11px] text-emerald-400 bg-emerald-950/40 border border-emerald-900/60 rounded-xl px-3 py-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 shrink-0" />
-                <span>End-to-End Encrypted (AES-256-GCM) · Direct P2P</span>
-              </div>
 
               {/* Accept & Decline Buttons */}
               <div className="grid grid-cols-2 gap-3 pt-1">
